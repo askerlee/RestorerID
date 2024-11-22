@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=0 python scripts/Inference.py --LQpath TestSamples/1/lq1.png  --Refpath TestSamples/1/ref1.png  --Outputpath Results/1/
