@@ -3781,7 +3781,7 @@ class LatentDiffusionRestorerID(DDPM):
 
         if self.model.conditioning_key is not None:        
             semantic_c = self.cond_stage_model(text_cond)  #[B 77 1024]
-            ref_c,uncon_ref_c = self.Adapter(faceid_embeds, img_ref)   #[B 4 1024]
+            ref_c, uncon_ref_c = self.Adapter(faceid_embeds, img_ref)   #[B 4 1024]
             if random.random()>self.IPA_dropout:                    #CFG training
                 cond = torch.cat([semantic_c,ref_c],dim=1)
             else:

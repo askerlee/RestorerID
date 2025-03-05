@@ -341,11 +341,12 @@ class DDIMSampler(object):
 
     @torch.no_grad()
     def ddim_sampling_sr_t(self, cond, struct_cond, ipscale, shape,
-                      x_T=None, ddim_use_original_steps=False,
-                      callback=None, timesteps=None, quantize_denoised=False,
-                      mask=None, x0=None, img_callback=None, log_every_t=100,
-                      temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
-                      unconditional_guidance_scale=1., unconditional_conditioning=None,):
+                           x_T=None, ddim_use_original_steps=False,
+                           callback=None, timesteps=None, quantize_denoised=False,
+                           mask=None, x0=None, img_callback=None, log_every_t=100,
+                           temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
+                           unconditional_guidance_scale=1., unconditional_conditioning=None, 
+                           ensemble_methods_with_weights=None):
         device = self.model.betas.device
         b = shape[0]
         if x_T is None:
@@ -378,11 +379,12 @@ class DDIMSampler(object):
                 img = img_orig * mask + (1. - mask) * img
 
             outs = self.p_sample_ddim_sr_t(img, cond, struct_cond, ipscale, ts, index=index, use_original_steps=ddim_use_original_steps,
-                                      quantize_denoised=quantize_denoised, temperature=temperature,
-                                      noise_dropout=noise_dropout, score_corrector=score_corrector,
-                                      corrector_kwargs=corrector_kwargs,
-                                      unconditional_guidance_scale=unconditional_guidance_scale,
-                                      unconditional_conditioning=unconditional_conditioning)
+                                           quantize_denoised=quantize_denoised, temperature=temperature,
+                                           noise_dropout=noise_dropout, score_corrector=score_corrector,
+                                           corrector_kwargs=corrector_kwargs,
+                                           unconditional_guidance_scale=unconditional_guidance_scale,
+                                           unconditional_conditioning=unconditional_conditioning,
+                                           ensemble_methods_with_weights=ensemble_methods_with_weights)
             img, pred_x0 = outs
             if callback: callback(i)
             if img_callback: img_callback(pred_x0, i)
@@ -396,7 +398,8 @@ class DDIMSampler(object):
     @torch.no_grad()
     def p_sample_ddim_sr_t(self, x, c, struct_c, ipscale, t, index, repeat_noise=False, use_original_steps=False, quantize_denoised=False,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
-                      unconditional_guidance_scale=1., unconditional_conditioning=None):
+                      unconditional_guidance_scale=1., unconditional_conditioning=None,
+                      ensemble_methods_with_weights=None):
         b, *_, device = *x.shape, x.device
 
         alphas = self.model.alphas_cumprod if use_original_steps else self.ddim_alphas
@@ -420,8 +423,15 @@ class DDIMSampler(object):
             x_in = torch.cat([x] * 2)
             c_in = torch.cat([unconditional_conditioning, c])
             
-            e_t_uncond, e_t = self.model.apply_model(x_in, t_in, c_in, struct_c_t,ip_scale).chunk(2)
+            e_t_uncond, e_t = self.model.apply_model(x_in, t_in, c_in, struct_c_t, ip_scale).chunk(2)
             e_t = e_t_uncond + unconditional_guidance_scale * (e_t - e_t_uncond)
+
+        if ensemble_methods_with_weights is not None and len(ensemble_methods_with_weights) > 1:
+            ensemble_methods_with_weights = torch.tensor(ensemble_methods_with_weights, dtype=e_t.dtype, device=device)
+            ensemble_methods_with_weights = ensemble_methods_with_weights / ensemble_methods_with_weights.sum()
+            e_t_chunks = torch.stack(e_t.chunk(len(ensemble_methods_with_weights), dim=0))
+            e_t = (e_t_chunks * ensemble_methods_with_weights.reshape(-1, 1, 1, 1, 1)).sum(dim=0)
+            e_t = e_t.repeat(len(ensemble_methods_with_weights), 1, 1, 1)
 
         if self.model.parameterization == "v":
             e_t = a_t.sqrt() * e_t + sqrt_one_minus_at * x

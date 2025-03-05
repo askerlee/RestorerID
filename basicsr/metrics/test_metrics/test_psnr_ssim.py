@@ -4,7 +4,7 @@ import torch
 from basicsr.metrics import calculate_psnr, calculate_ssim
 from basicsr.metrics.psnr_ssim import calculate_psnr_pt, calculate_ssim_pt
 from basicsr.utils import img2tensor
-
+import sys
 
 def test(img_path, img_path2, crop_border, test_y_channel=False):
     img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
@@ -45,8 +45,5 @@ def test(img_path, img_path2, crop_border, test_y_channel=False):
 
 
 if __name__ == '__main__':
-    test('tests/data/bic/baboon.png', 'tests/data/gt/baboon.png', crop_border=4, test_y_channel=False)
-    test('tests/data/bic/baboon.png', 'tests/data/gt/baboon.png', crop_border=4, test_y_channel=True)
-
-    test('tests/data/bic/comic.png', 'tests/data/gt/comic.png', crop_border=4, test_y_channel=False)
-    test('tests/data/bic/comic.png', 'tests/data/gt/comic.png', crop_border=4, test_y_channel=True)
+    test(sys.argv[1], sys.argv[2], crop_border=4, test_y_channel=False)
+    test(sys.argv[1], sys.argv[2], crop_border=4, test_y_channel=True)
