@@ -9,11 +9,11 @@ if len(sys.argv) != 3:
 samples_folder = sys.argv[1]
 results_folder = sys.argv[2]
 
-methods = [ 'adaface', 'ipadapter', 'pulid', 'consistentID' ]
+methods = [ 'adaface', 'ipadapter', 'consistentID', 'arc2face' ]
 stats   = { 'psnr': {}, 'ssim': {}, 'face_sim': {} }
 face_engine = 'deepface'
     
-# subj_folder: 1, 2, ..., 10
+# subj_folder: 1, 10, 2, ..., 9
 for subj_folder in sorted(os.listdir(samples_folder)):
     lq1_gt_path = os.path.join(samples_folder, subj_folder, 'lq1-gt.png')
     lq1_path    = os.path.join(samples_folder, subj_folder, 'lq1.png')

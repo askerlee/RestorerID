@@ -32,7 +32,7 @@ import math
 import copy
 from scripts.wavelet_color_fix import wavelet_reconstruction, adaptive_instance_normalization
 import torch.nn.functional as F
-
+from adaface.adaface_wrapper import AdaFaceWrapper
 
 
 def space_timesteps(num_timesteps, section_counts):
@@ -177,7 +177,8 @@ def main():
     )
 
     parser.add_argument("--methods", type=str, nargs="+", default=["adaface"],
-                        choices=["adaface", "ipadapter"])
+                        choices=["adaface", "ipadapter", "consistentID", "arc2face"],
+                        help="Face encoder to use for inference")
     parser.add_argument("--adaface_unet_ckpt", type=str, default='models/sd15-dste8-vae.safetensors',
                         help="Path to the AdaFace UNet checkpoint")
     parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["consistentID", "arc2face"],
@@ -249,118 +250,138 @@ def main():
     musiq_metric = pyiqa.create_metric('musiq', device=device)
     precision_scope = autocast if opt.precision == "autocast" else nullcontext
 
-    if 'adaface' in opt.methods:
-        from adaface.adaface_wrapper import AdaFaceWrapper
+    adaface = AdaFaceWrapper("text2img", opt.adaface_unet_ckpt, opt.adaface_encoder_types, 
+                             opt.adaface_ckpt_paths, opt.adaface_encoder_cfg_scales,
+                             opt.enabled_encoders, False,
+                             default_scheduler_name='ddim', 
+                             subject_string='z', 
+                             num_inference_steps=50, 
+                             negative_prompt=None,
+                             unet_types=None,
+                             main_unet_filepath=None, extra_unet_dirpaths=None, 
+                             unet_weights_in_ensemble=None, enable_static_img_suffix_embs=None,
+                             unet_uses_attn_lora=False,
+                             shrink_subj_attn=False,
+                             device=device)
 
-        adaface = AdaFaceWrapper("text2img", opt.adaface_unet_ckpt, opt.adaface_encoder_types, 
-                                 opt.adaface_ckpt_paths, opt.adaface_encoder_cfg_scales,
-                                 opt.enabled_encoders, False,
-                                 default_scheduler_name='ddim', 
-                                 subject_string='z', 
-                                 num_inference_steps=50, 
-                                 negative_prompt=None,
-                                 unet_types=None,
-                                 main_unet_filepath=None, extra_unet_dirpaths=None, 
-                                 unet_weights_in_ensemble=None, enable_static_img_suffix_embs=None,
-                                 unet_uses_attn_lora=False,
-                                 shrink_subj_attn=False,
-                                 device=device)
+    # subj_folder: 1, 10, 2, ..., 9
+    for subj_folder in sorted(os.listdir(opt.LQpath)):
+        lq1_path    = os.path.join(opt.LQpath, subj_folder,  'lq1.png')
+        ref1_path   = os.path.join(opt.Refpath, subj_folder, 'ref1.png')
+        output_path = os.path.join(opt.Outputpath, subj_folder)
+        print(f'Processing {lq1_path} and {ref1_path}')
+
         # adaface_subj_embs: [20, 768]. These are subject embeddings in the text space, 
-        # so we cannot be used directly.
+        # so we cannot use them directly. Instead, they need to be encoded by the CLIP text encoder.
         adaface_subj_embs = \
-            adaface.prepare_adaface_embeddings([opt.Refpath], None, 
+            adaface.prepare_adaface_embeddings([ref1_path], None, 
                                                 perturb_at_stage='img_prompt_emb',
                                                 perturb_std=0, 
                                                 update_text_encoder=True)
 
-    with torch.no_grad():
-        with precision_scope("cuda"):
-            with model.ema_scope():
-                lq_img = load_img(opt.LQpath).to(device)
-                lq_latent_generator = model.encode_first_stage(lq_img)
-                lq_latent = model.get_first_stage_encoding(lq_latent_generator)
+        with torch.no_grad():
+            with precision_scope("cuda"):
+                with model.ema_scope():
+                    lq_img = load_img(lq1_path).to(device)
+                    lq_latent_generator = model.encode_first_stage(lq_img)
+                    lq_latent = model.get_first_stage_encoding(lq_latent_generator)
 
-                ref_img = cv2.imread(opt.Refpath)
-                faces = app.get(ref_img)
-                faceid_embeds = torch.from_numpy(faces[0].normed_embedding).unsqueeze(0)
-                ref_image = face_align.norm_crop(ref_img, landmark=faces[0].kps, image_size=224) # you can also segment the face
+                    ref_img = cv2.imread(ref1_path)
+                    faces = app.get(ref_img)
+                    faceid_embeds = torch.from_numpy(faces[0].normed_embedding).unsqueeze(0)
+                    ref_image = face_align.norm_crop(ref_img, landmark=faces[0].kps, image_size=224) # you can also segment the face
 
-                positive_text_c = ["best quality, high quality"]
-                negative_text_c= ["cartoon, 3d, paint, monochrome, lowres, bad anatomy, worst quality, low quality"]
-                pos_cond0 = model.cond_stage_model(positive_text_c)
-                neg_cond0 = model.cond_stage_model(negative_text_c)
+                    positive_text_c = ["best quality, high quality"]
+                    negative_text_c= ["cartoon, 3d, paint, monochrome, lowres, bad anatomy, worst quality, low quality"]
+                    pos_cond0 = model.cond_stage_model(positive_text_c)
+                    neg_cond0 = model.cond_stage_model(negative_text_c)
 
-                # IP adapter embeddings are good at details. So we always include them.
-                # ref_c, uncond_ref_c: [1, 4, 768]
-                ip_ref_c, ip_uncond_ref_c = model.Adapter(faceid_embeds, ref_image)
-                positive_conds = []
-                negative_conds = []
+                    # IP adapter embeddings are good at details. So we always include them.
+                    # ref_c, uncond_ref_c: [1, 4, 768]
+                    ip_ref_c, ip_uncond_ref_c = model.Adapter(faceid_embeds, ref_image)
+                    positive_conds = []
+                    negative_conds = []
 
-                for method in opt.methods:
-                    if method == "adaface":
-                        # ref_c, uncond_ref_c: [1, 77, 768]
-                        pos_cond_ada, neg_cond_ada, _, _ = \
-                            adaface.encode_prompt(positive_text_c[0], negative_text_c[0], 
-                                                  placeholder_tokens_pos='append',
-                                                  ablate_prompt_only_placeholders=False,
-                                                  repeat_prompt_for_each_encoder=False,
-                                                  verbose=True)
-                        # NOTE: If not appending with ip_ref_c and ip_uncond_ref_c,
-                        # to keep the prompt embeddings the same length as ipadapter prompt embeddings,
-                        # we have to use zero padding. If padding with the tail 4 tokens 
-                        # of pos_cond0/neg_cond0, the model will fail.
-                        positive_cond = torch.cat([(pos_cond0 + pos_cond_ada) / 2, ip_ref_c],     dim=1)
-                        negative_cond = torch.cat([(neg_cond0 + neg_cond_ada) / 2, ip_uncond_ref_c], dim=1)
-                    else:
-                        positive_cond = torch.cat([pos_cond0, ip_ref_c],        dim=1)
-                        negative_cond = torch.cat([neg_cond0, ip_uncond_ref_c], dim=1)
+                    for method in opt.methods:
+                        if method == "adaface":
+                            # ref_c, uncond_ref_c: [1, 77, 768]
+                            pos_cond_ada, neg_cond_ada, _, _ = \
+                                adaface.encode_prompt(positive_text_c[0], negative_text_c[0], 
+                                                    placeholder_tokens_pos='append',
+                                                    ablate_prompt_only_placeholders=False,
+                                                    repeat_prompt_for_each_encoder=False,
+                                                    verbose=True)
+                            # Take the average of the original and AdaFace embeddings, 
+                            # to make the effects of adaface embeddings less drastic.
+                            positive_cond = torch.cat([(pos_cond0 + pos_cond_ada) / 2, ip_ref_c],     dim=1)
+                            negative_cond = torch.cat([(neg_cond0 + neg_cond_ada) / 2, ip_uncond_ref_c], dim=1)
+                        elif method == "ipadapter":
+                            positive_cond = torch.cat([pos_cond0, ip_ref_c],        dim=1)
+                            negative_cond = torch.cat([neg_cond0, ip_uncond_ref_c], dim=1)
+                        elif method == "consistentID":
+                            consistentID_encoder = adaface.id2ada_prompt_encoder.id2ada_prompt_encoders[0]
+                            _, _, pos_cond_consistentID, neg_cond_consistentID \
+                                = consistentID_encoder.get_img_prompt_embs(None, None, [ref1_path], 
+                                                                        None, id_batch_size=1)
+                            positive_cond = torch.cat([pos_cond0, pos_cond_consistentID, ip_ref_c],        dim=1)
+                            negative_cond = torch.cat([neg_cond0, neg_cond_consistentID, ip_uncond_ref_c], dim=1)
+                        elif method == "arc2face":
+                            arc2face_encoder = adaface.id2ada_prompt_encoder.id2ada_prompt_encoders[1]
+                            _, _, pos_cond_arc2face, _ \
+                                = arc2face_encoder.get_img_prompt_embs(None, None, [ref1_path],
+                                                                    None, id_batch_size=1)
+                            neg_cond_arc2face = neg_cond0[:, 4:20]
+                            positive_cond = torch.cat([pos_cond0, pos_cond_arc2face, ip_ref_c],        dim=1)
+                            negative_cond = torch.cat([neg_cond0, neg_cond_arc2face, ip_uncond_ref_c], dim=1)
+                        else:
+                            raise ValueError(f"Unknown method: {method}")
+                        
+                        positive_conds.append(positive_cond)
+                        negative_conds.append(negative_cond)
+                    
+                    positive_conds = torch.cat(positive_conds, dim=0)
+                    negative_conds = torch.cat(negative_conds, dim=0)
+                    print('positive_conds:', list(positive_conds.shape))
 
-                    positive_conds.append(positive_cond)
-                    negative_conds.append(negative_cond)
-                
-                positive_conds = torch.cat(positive_conds, dim=0)
-                negative_conds = torch.cat(negative_conds, dim=0)
-                print('positive_conds:', list(positive_conds.shape))
+                    musiq = musiq_metric((lq_img+1.0)/2)
+                    # ipscale: 0.16401251033684372
+                    ipscale = math.exp(0.1*(9.5-musiq))
+                    print(ipscale)
 
-                musiq = musiq_metric((lq_img+1.0)/2)
-                # ipscale: 0.16401251033684372
-                ipscale = math.exp(0.1*(9.5-musiq))
-                print(ipscale)
+                    x_T = None
+                    lq_latent = lq_latent.repeat(len(opt.methods), 1, 1, 1)
 
-                x_T = None
-                lq_latent = lq_latent.repeat(len(opt.methods), 1, 1, 1)
+                    samples, _ = \
+                        sampler.ddim_sampling_sr_t(cond=positive_conds,
+                                                struct_cond=lq_latent,
+                                                ipscale = ipscale,
+                                                shape=lq_latent.shape,
+                                                unconditional_conditioning=negative_conds,
+                                                unconditional_guidance_scale=opt.scale,
+                                                timesteps=np.array(ddim_timesteps),
+                                                x_T=x_T,
+                                                ensemble_methods_with_weights=opt.ensemble_methods_with_weights)
+                    
+                    x_samples = model.decode_first_stage(samples)
 
-                samples, _ = \
-                    sampler.ddim_sampling_sr_t(cond=positive_conds,
-                                               struct_cond=lq_latent,
-                                               ipscale = ipscale,
-                                               shape=lq_latent.shape,
-                                               unconditional_conditioning=negative_conds,
-                                               unconditional_guidance_scale=opt.scale,
-                                               timesteps=np.array(ddim_timesteps),
-                                               x_T=x_T,
-                                               ensemble_methods_with_weights=opt.ensemble_methods_with_weights)
-                
-                x_samples = model.decode_first_stage(samples)
-
-                if opt.colorfix_type == 'adain':
-                    x_samples = adaptive_instance_normalization(x_samples, lq_img)
-                elif opt.colorfix_type == 'wavelet':
-                    x_samples = wavelet_reconstruction(x_samples, lq_img)
-                x_samples = torch.clamp((x_samples + 1.0) / 2.0, min=0.0, max=1.0)
-                
-                os.makedirs(opt.Outputpath, exist_ok=True)
-                filename = os.path.basename(opt.LQpath).split('.')[0] 
-                
-                for index in range(len(x_samples)):
-                    filename_components = [filename] 
-                    method = opt.methods[index]
-                    if method != 'ipadapter':
-                        filename_components.append(method)
-                    save_path = os.path.join(opt.Outputpath, '-'.join(filename_components) + ".png")
-                    x_sample = 255. * rearrange(x_samples[index].cpu().numpy(), 'c h w -> h w c')
-                    Image.fromarray(x_sample.astype(np.uint8)).save(save_path)
-                    print(f"Restored image saved to {save_path}")
+                    if opt.colorfix_type == 'adain':
+                        x_samples = adaptive_instance_normalization(x_samples, lq_img)
+                    elif opt.colorfix_type == 'wavelet':
+                        x_samples = wavelet_reconstruction(x_samples, lq_img)
+                    x_samples = torch.clamp((x_samples + 1.0) / 2.0, min=0.0, max=1.0)
+                    
+                    os.makedirs(output_path, exist_ok=True)
+                    filename = os.path.basename(lq1_path).split('.')[0] 
+                    
+                    for index in range(len(x_samples)):
+                        filename_components = [filename] 
+                        method = opt.methods[index]
+                        if method != 'ipadapter':
+                            filename_components.append(method)
+                        save_path = os.path.join(output_path, '-'.join(filename_components) + ".png")
+                        x_sample = 255. * rearrange(x_samples[index].cpu().numpy(), 'c h w -> h w c')
+                        Image.fromarray(x_sample.astype(np.uint8)).save(save_path)
+                        print(f"Restored image saved to {save_path}")
 
 if __name__ == "__main__":
     main()
