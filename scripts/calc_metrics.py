@@ -9,7 +9,7 @@ if len(sys.argv) != 3:
 samples_folder = sys.argv[1]
 results_folder = sys.argv[2]
 
-methods = [ 'adaface', 'ipadapter', 'consistentID', 'arc2face' ]
+methods = [ 'adaface', 'ipadapter', 'consistentID', 'arc2face', 'consistentID-arc2face' ]
 stats   = { 'psnr': {}, 'ssim': {}, 'face_sim': {} }
 face_engine = 'deepface'
     
@@ -26,7 +26,7 @@ for subj_folder in sorted(os.listdir(samples_folder)):
         if restored_img_filename == 'lq1.png':
             method = 'ipadapter'
         else:
-            method = restored_img_filename.split('-')[1][:-4]
+            method = '-'.join(restored_img_filename.split('-')[1:])[:-4]
             if not method in methods:
                 breakpoint()
 

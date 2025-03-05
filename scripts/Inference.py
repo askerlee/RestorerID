@@ -177,7 +177,8 @@ def main():
     )
 
     parser.add_argument("--methods", type=str, nargs="+", default=["adaface"],
-                        choices=["adaface", "ipadapter", "consistentID", "arc2face"],
+                        choices=["adaface", "ipadapter", "consistentID", 
+                                 "arc2face", "consistentID-arc2face"],
                         help="Face encoder to use for inference")
     parser.add_argument("--adaface_unet_ckpt", type=str, default='models/sd15-dste8-vae.safetensors',
                         help="Path to the AdaFace UNet checkpoint")
@@ -318,24 +319,26 @@ def main():
                         elif method == "ipadapter":
                             positive_cond = torch.cat([pos_cond0, ip_ref_c],        dim=1)
                             negative_cond = torch.cat([neg_cond0, ip_uncond_ref_c], dim=1)
-                        elif method == "consistentID":
+                        else:
                             consistentID_encoder = adaface.id2ada_prompt_encoder.id2ada_prompt_encoders[0]
+                            arc2face_encoder = adaface.id2ada_prompt_encoder.id2ada_prompt_encoders[1]
                             _, _, pos_cond_consistentID, neg_cond_consistentID \
                                 = consistentID_encoder.get_img_prompt_embs(None, None, [ref1_path], 
-                                                                        None, id_batch_size=1)
-                            positive_cond = torch.cat([pos_cond0, pos_cond_consistentID, ip_ref_c],        dim=1)
-                            negative_cond = torch.cat([neg_cond0, neg_cond_consistentID, ip_uncond_ref_c], dim=1)
-                        elif method == "arc2face":
-                            arc2face_encoder = adaface.id2ada_prompt_encoder.id2ada_prompt_encoders[1]
+                                                                           None, id_batch_size=1)
                             _, _, pos_cond_arc2face, _ \
                                 = arc2face_encoder.get_img_prompt_embs(None, None, [ref1_path],
                                                                     None, id_batch_size=1)
-                            neg_cond_arc2face = neg_cond0[:, 4:20]
-                            positive_cond = torch.cat([pos_cond0, pos_cond_arc2face, ip_ref_c],        dim=1)
-                            negative_cond = torch.cat([neg_cond0, neg_cond_arc2face, ip_uncond_ref_c], dim=1)
-                        else:
-                            raise ValueError(f"Unknown method: {method}")
-                        
+                            neg_cond_arc2face = neg_cond0[:, 4:20]                            
+                            if method == "consistentID":
+                                positive_cond = torch.cat([pos_cond0, pos_cond_consistentID, ip_ref_c],        dim=1)
+                                negative_cond = torch.cat([neg_cond0, neg_cond_consistentID, ip_uncond_ref_c], dim=1)
+                            if method == "arc2face":
+                                positive_cond = torch.cat([pos_cond0, pos_cond_arc2face, ip_ref_c],        dim=1)
+                                negative_cond = torch.cat([neg_cond0, neg_cond_arc2face, ip_uncond_ref_c], dim=1)
+                            if method == "consistentID-arc2face":
+                                positive_cond = torch.cat([pos_cond0, pos_cond_consistentID, pos_cond_arc2face, ip_ref_c],        dim=1)
+                                negative_cond = torch.cat([neg_cond0, neg_cond_consistentID, neg_cond_arc2face, ip_uncond_ref_c], dim=1)
+
                         positive_conds.append(positive_cond)
                         negative_conds.append(negative_cond)
                     
