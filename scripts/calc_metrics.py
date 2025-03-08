@@ -23,12 +23,9 @@ for subj_folder in sorted(os.listdir(samples_folder)):
     gt_img_np = cv2.imread(lq1_gt_path, cv2.IMREAD_UNCHANGED)
 
     for restored_img_filename in sorted(os.listdir(subj_results_folder)):
-        if restored_img_filename == 'lq1.png':
-            method = 'ipadapter'
-        else:
-            method = '-'.join(restored_img_filename.split('-')[1:])[:-4]
-            if not method in methods:
-                breakpoint()
+        method = '-'.join(restored_img_filename.split('-')[1:])[:-4]
+        if not method in methods:
+            breakpoint()
 
         restored_img_path = os.path.join(subj_results_folder, restored_img_filename)
         restored_img_np = cv2.imread(restored_img_path, cv2.IMREAD_UNCHANGED)
