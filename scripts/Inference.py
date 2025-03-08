@@ -265,8 +265,14 @@ def main():
                              shrink_subj_attn=False,
                              device=device)
 
-    # subj_folder: 1, 10, 2, ..., 9
-    for subj_folder in sorted(os.listdir(opt.LQpath)):
+    if 'lq1.png' in os.listdir(opt.LQpath):
+        subj_folders = ['']
+    else:
+        subj_folders = sorted(os.listdir(opt.LQpath))
+
+    # subj_folders: 1, 10, 2, ..., 9, 
+    # When LQpath is already the path to the LQ image, subj_folders = ['']
+    for subj_folder in subj_folders:
         lq1_path    = os.path.join(opt.LQpath, subj_folder,  'lq1.png')
         ref1_path   = os.path.join(opt.Refpath, subj_folder, 'ref1.png')
         output_path = os.path.join(opt.Outputpath, subj_folder)
@@ -379,8 +385,7 @@ def main():
                     for index in range(len(x_samples)):
                         filename_components = [filename] 
                         method = opt.methods[index]
-                        if method != 'ipadapter':
-                            filename_components.append(method)
+                        filename_components.append(method)
                         save_path = os.path.join(output_path, '-'.join(filename_components) + ".png")
                         x_sample = 255. * rearrange(x_samples[index].cpu().numpy(), 'c h w -> h w c')
                         Image.fromarray(x_sample.astype(np.uint8)).save(save_path)
